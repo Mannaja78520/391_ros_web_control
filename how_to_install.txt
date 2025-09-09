@@ -1,5 +1,5 @@
 python3 -m venv 391_web_venv
-echo "source $PWD/391_web_venv/bin/activate"
+echo "source $PWD/391_web_venv/bin/activate" >> ~/.bashrc
 source ~/.bashrc
 
 pip install flask opencv-python
