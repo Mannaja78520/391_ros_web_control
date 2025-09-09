@@ -1,0 +1,10 @@
+python3 -m venv 391_web_venv
+echo "source $PWD/391_web_venv/bin/activate"
+source ~/.bashrc
+
+pip install flask opencv-python
+
+sudo apt-get update
+sudo apt-get install -y ffmpeg
+python -c "import av,platform;print('PyAV=',av.__version__,'FFmpeg ok')"
+
