@@ -275,3 +275,10 @@ loadDevices();
   }
   connect();
 })();
+
+// Toggle float/dock ของ sidebar (ค่าเริ่มต้น: dock)
+document.getElementById('toggle-float').onclick = ()=>{
+  document.body.classList.toggle('float');
+  document.getElementById('toggle-float').textContent =
+    document.body.classList.contains('float') ? 'Dock Overlay' : 'Float Overlay';
+};
