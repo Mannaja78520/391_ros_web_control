@@ -1,0 +1,40 @@
+:root { color-scheme: dark; }
+body { font-family: system-ui, -apple-system, Segoe UI, Helvetica, Arial, sans-serif; background:#111; color:#eee; margin:0; padding:16px; }
+.bar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
+.controls { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
+.chip { display:inline-block; padding:6px 12px; border:1px solid #333; border-radius:999px; background:#222; }
+button, select { padding:8px 14px; border-radius:8px; border:1px solid #444; background:#1e1e1e; color:#eee; cursor:pointer; }
+button:hover { background:#2a2a2a; }
+.grid { display:grid; grid-template-columns: repeat(auto-fill,minmax(280px,1fr)); gap:12px; }
+.card { background:#151515; border:1px solid #2a2a2a; border-radius:12px; padding:10px; }
+.toolbar { display:flex; gap:6px; align-items:center; justify-content:space-between; margin-bottom:8px; }
+.row { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+.vid { display:block; background:#000; border-radius:8px; width:auto; height:auto; max-width:100%; object-fit:contain; }
+
+/* Overlay (scroll) */
+.overlay { position:fixed; z-index:9999; width:340px; max-height:52vh; overflow:auto; background:#141414; border:1px solid #2a2a2a; border-radius:12px; box-shadow:0 6px 24px rgba(0,0,0,.5); }
+.pin-bottom-right { right:16px; bottom:16px; }
+.pin-top-right    { right:16px; top:16px; }
+.pin-top-left     { left:16px; top:16px; }
+.pin-bottom-left  { left:16px; bottom:16px; }
+.overlay-header { display:flex; justify-content:space-between; align-items:center; padding:8px 10px; border-bottom:1px solid #2a2a2a; }
+.overlay-body { padding:10px; font-size:13px; }
+.overlay .item { border-bottom:1px dashed #2a2a2a; padding:6px 0; }
+.overlay .item:last-child { border-bottom:none; }
+.overlay .topic { font-weight:600; color:#cfe6ff; }
+.overlay .time { opacity:.7; font-size:12px; }
+.overlay .empty { opacity:.7; }
+
+/* HUD (fixed values) */
+.hud { position:fixed; z-index:10000; width:260px; background:#0f0f0f; border:1px solid #2a2a2a; border-radius:12px; box-shadow:0 6px 24px rgba(0,0,0,.5); }
+.hud-header { display:flex; justify-content:space-between; align-items:center; padding:8px 10px; border-bottom:1px solid #2a2a2a; }
+.hud-body { padding:8px 10px; display:grid; grid-template-columns: 1fr; gap:8px; }
+.hud-item { background:#121212; border:1px solid #2a2a2a; border-radius:10px; padding:8px; }
+.hud-label { font-size:12px; opacity:.8; margin-bottom:4px; }
+.hud-value { font-variant-numeric: tabular-nums; font-size:22px; letter-spacing:0.5px; }
+
+/* Reuse pin-* for HUD as well */
+
+/* กล่องสถานะซ้ายบน (reuse HUD style) */
+.status-box { width: 260px; }
+.pin-top-left { left:16px; top:16px; }
