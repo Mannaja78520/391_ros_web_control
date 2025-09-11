@@ -1,82 +1,21 @@
 <!doctype html>
 <meta charset="utf-8" />
-<title>Multi-Cam + ROS Dock</title>
+<title>Multi-Cam WebRTC</title>
 <link rel="stylesheet" href="/static/style.css" />
 
 <div class="bar">
   <div class="chip">Multi-Cam WebRTC</div>
-  <div class="chip">scale: 1.0</div>
-  <div class="chip">pace_fps: off</div>
-  <div id="status" class="chip">idle</div>
-  <div class="spacer"></div>
-  <button id="toggle-float" class="btn">Float Overlay</button>
+  <div class="chip">Start-only config via v4l2-ctl</div>
+  <div id="global-status" class="chip">ready</div>
 </div>
 
-<div class="layout">
-  <!-- ซ้าย: วิดีโอ ไม่ถูกบัง -->
-  <div class="main">
-    <div class="controls">
-      <select id="camSel"></select>
-      <button id="refresh">Refresh</button>
-      <button id="add">Add Stream</button>
-      <small>เลือกกล้องแล้วกด Add เพื่อเปิดหลายกล้องพร้อมกัน</small>
-    </div>
-
-    <div id="grid" class="grid"></div>
-  </div>
-
-  <!-- ขวา: Sidebar สำหรับ ROS (ไม่ทับวิดีโอ) -->
-  <aside class="sidebar" id="sidebar">
-    <!-- HUD: ค่าคงที่ -->
-    <section class="panel">
-      <div class="panel-header sticky">
-        <span>ENCODER / ODOM</span>
-        <button id="pin-clear" class="btn-sm">Zero/Reset</button>
-      </div>
-      <div class="panel-body hud-grid">
-        <div class="hud-item">
-          <div class="hud-label">Left Enc</div>
-          <div id="pin-left-enc" class="hud-value">—</div>
-        </div>
-        <div class="hud-item">
-          <div class="hud-label">Right Enc</div>
-          <div id="pin-right-enc" class="hud-value">—</div>
-        </div>
-        <div class="hud-item">
-          <div class="hud-label">Distance (m)</div>
-          <div id="pin-dist" class="hud-value">—</div>
-        </div>
-        <div class="hud-item">
-          <div class="hud-label">Heading (deg)</div>
-          <div id="pin-heading" class="hud-value">—</div>
-        </div>
-      </div>
-    </section>
-
-    <!-- Status กล่องเล็ก -->
-    <section class="panel">
-      <div class="panel-header sticky">
-        <span>Status</span>
-      </div>
-      <div class="panel-body">
-        <div class="hud-item">
-          <div class="hud-label">/status</div>
-          <div id="status-text" class="hud-value">waiting...</div>
-        </div>
-      </div>
-    </section>
-
-    <!-- Overlay สตรีมข้อความ ROS (เลื่อนอ่านได้) -->
-    <section class="panel">
-      <div class="panel-header sticky">
-        <span>ROS 2 Messages</span>
-        <button id="ov-clear" class="btn-sm">Clear</button>
-      </div>
-      <div id="ros-body" class="panel-body list">
-        <div class="empty">รอข้อมูลจาก ROS...</div>
-      </div>
-    </section>
-  </aside>
+<div class="controls">
+  <select id="camSel"></select>
+  <button id="refresh">Refresh</button>
+  <button id="add">Add Stream</button>
+  <small>เลือกกล้อง → ตั้งค่าหน้าการ์ด → กด Start (ค่า apply ตอนเริ่มเท่านั้น)</small>
 </div>
+
+<div id="grid" class="grid"></div>
 
 <script src="/static/app.js"></script>

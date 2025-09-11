@@ -1,3 +1,11 @@
+sudo nano /etc/apt/apt.conf.d/20auto-upgrades
+#
+APT::Periodic::Update-Package-Lists "0";
+APT::Periodic::Unattended-Upgrade "0";
+#
+
+sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
+
 python3 -m venv 391_web_venv
 echo "source $PWD/391_web_venv/bin/activate" >> ~/.bashrc
 source ~/.bashrc
@@ -9,3 +17,22 @@ sudo apt-get install -y ffmpeg
 sudo apt install v4l-utils
 python -c "import av,platform;print('PyAV=',av.__version__,'FFmpeg ok')"
 
+
+
+sudo nano /boot/firmware/config.txt
+#
+hdmi_force_hotplug=0
+max_usb_current=1
+#
+
+sudo systemctl disable systemd-networkd-wait-online.service
+sudo systemctl mask systemd-networkd-wait-online.service
+
+sudo systemctl disable dhcpcd-wait-online.service
+sudo systemctl mask dhcpcd-wait-online.service
+
+sudo nano /etc/dhcpcd.conf
+#
+noarp
+waitip 0
+#

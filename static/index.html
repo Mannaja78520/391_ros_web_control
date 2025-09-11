@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ROS2 + 3 Cameras Dashboard</title>
+  <style>
+    :root{--panel:#f7f8fb;--card:#fff;--bd:#e8e8ef}
+    *{box-sizing:border-box}
+    body{font-family:system-ui,Segoe UI,Arial,sans-serif;margin:0;background:var(--panel);color:#111}
+    header{padding:14px 18px;border-bottom:1px solid var(--bd);background:#fff;position:sticky;top:0;z-index:10}
+    h1{font-size:20px;margin:0}
+    .wrap{display:grid;grid-template-columns:1fr 1fr 1fr 360px;gap:12px;padding:12px}
+    @media (max-width:1100px){.wrap{grid-template-columns:1fr}}
+    .card{background:var(--card);border:1px solid var(--bd);border-radius:14px;box-shadow:0 1px 10px rgba(0,0,0,.04)}
+    .card h3{margin:0;padding:10px 12px;border-bottom:1px solid var(--bd);font-size:16px}
+    .card .body{padding:12px}
+    .grid{display:grid;grid-template-columns:repeat(2,minmax(120px,1fr));gap:8px}
+    label{font-size:12px;color:#444;display:block;margin-bottom:4px}
+    select,button{width:100%;font-size:14px;padding:8px;border-radius:10px;border:1px solid var(--bd);background:#fff}
+    button{cursor:pointer}
+    .pill{display:inline-block;padding:4px 10px;border-radius:999px;font-size:12px;margin-left:6px}
+    .ok{background:#e6f7eb;color:#0a7}
+    .bad{background:#ffecec;color:#c33}
+    .preview{width:100%;background:#000;border-radius:0 0 14px 14px;border-top:1px solid var(--bd)}
+    .kv{display:flex;justify-content:space-between;border-bottom:1px dashed var(--bd);padding:6px 0}
+    .kv:last-child{border-bottom:none}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  </style>
+</head>
+<body>
+  <header><h1>ROS2 + 3 Cameras Dashboard</h1></header>
+
+  <div class="wrap">
+    <!-- Camera Slots 1..3 -->
+    <div id="cam1" class="card">
+      <h3>Camera 1 <span id="s1" class="pill">-</span></h3>
+      <div class="body">
+        <div class="grid">
+          <div><label>Device</label><select id="dev1"></select></div>
+          <div><label>Format</label><select id="fmt1"></select></div>
+          <div><label>Resolution</label><select id="res1"></select></div>
+          <div><label>FPS</label><select id="fps1"></select></div>
+        </div>
+        <div style="margin-top:10px"><button onclick="apply(1)">Apply</button></div>
+      </div>
+      <img id="img1" class="preview" src="/video/1.mjpg" alt="cam1" />
+    </div>
+
+    <div id="cam2" class="card">
+      <h3>Camera 2 <span id="s2" class="pill">-</span></h3>
+      <div class="body">
+        <div class="grid">
+          <div><label>Device</label><select id="dev2"></select></div>
+          <div><label>Format</label><select id="fmt2"></select></div>
+          <div><label>Resolution</label><select id="res2"></select></div>
+          <div><label>FPS</label><select id="fps2"></select></div>
+        </div>
+        <div style="margin-top:10px"><button onclick="apply(2)">Apply</button></div>
+      </div>
+      <img id="img2" class="preview" src="/video/2.mjpg" alt="cam2" />
+    </div>
+
+    <div id="cam3" class="card">
+      <h3>Camera 3 <span id="s3" class="pill">-</span></h3>
+      <div class="body">
+        <div class="grid">
+          <div><label>Device</label><select id="dev3"></select></div>
+          <div><label>Format</label><select id="fmt3"></select></div>
+          <div><label>Resolution</label><select id="res3"></select></div>
+          <div><label>FPS</label><select id="fps3"></select></div>
+        </div>
+        <div style="margin-top:10px"><button onclick="apply(3)">Apply</button></div>
+      </div>
+      <img id="img3" class="preview" src="/video/3.mjpg" alt="cam3" />
+    </div>
+
+    <!-- ROS Panel (Rightmost) -->
+    <div class="card" style="grid-row:1 / span 3;">
+      <h3>ROS2 Telemetry</h3>
+      <div class="body">
+        <div class="kv"><span>Status</span><span id="ros_status" class="mono">-</span></div>
+        <div class="kv"><span>Encoder</span><span id="ros_enc" class="mono">-</span></div>
+        <div class="kv"><span>IMU yaw</span><span id="ros_imu_yaw" class="mono">-</span></div>
+        <div class="kv"><span>Odom x,y,θ</span><span id="ros_odom_pose" class="mono">-</span></div>
+        <div class="kv"><span>Last update</span><span id="ros_ts" class="mono">-</span></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+const $ = s => document.querySelector(s);
+const api = (p)=>fetch(p).then(r=>r.json());
+
+// ----------------- Camera helpers (per slot) -----------------
+async function loadDevices(slot){
+  const j = await api('/api/devices');
+  const devSel = $('#dev'+slot);
+  devSel.innerHTML='';
+  (j.devices||[]).forEach(d=>{
+    const opt=document.createElement('option');
+    opt.value=d.device; opt.textContent=`${d.device}${d.name? ' — '+d.name:''}`;
+    devSel.appendChild(opt);
+  });
+}
+
+async function loadCaps(slot){
+  const devSel = $('#dev'+slot);
+  const fmtSel = $('#fmt'+slot);
+  const resSel = $('#res'+slot);
+  const fpsSel = $('#fps'+slot);
+  fmtSel.innerHTML='';resSel.innerHTML='';fpsSel.innerHTML='';
+  const dev = devSel.value;
+  const j = await api(`/api/caps?dev=${encodeURIComponent(dev)}`);
+  const caps = j.caps || {};
+  // fill formats
+  Object.keys(caps).forEach(fmt=>{
+    const o=document.createElement('option'); o.value=fmt; o.textContent=fmt; fmtSel.appendChild(o);
+  });
+  onFmtChange(slot, caps);
+  return caps;
+}
+
+function onFmtChange(slot, caps){
+  const fmtSel = $('#fmt'+slot);
+  const resSel = $('#res'+slot);
+  resSel.innerHTML='';
+  const fmt = fmtSel.value;
+  const sizes = fmt && caps[fmt] ? Object.keys(caps[fmt]) : [];
+  sizes.sort((a,b)=>{const [aw,ah]=a.split('x').map(Number);const [bw,bh]=b.split('x').map(Number);return (bw*bh)-(aw*ah)});
+  sizes.forEach(sz=>{const o=document.createElement('option');o.value=sz;o.textContent=sz;resSel.appendChild(o);});
+  onResChange(slot, caps);
+}
+
+function onResChange(slot, caps){
+  const fmtSel = $('#fmt'+slot);
+  const resSel = $('#res'+slot);
+  const fpsSel = $('#fps'+slot);
+  fpsSel.innerHTML='';
+  const fmt = fmtSel.value, sz = resSel.value;
+  (caps[fmt]?.[sz]||[]).forEach(f=>{const o=document.createElement('option');o.value=f;o.textContent=f+" fps";fpsSel.appendChild(o);});
+}
+
+async function apply(slot){
+  const sPill = $('#s'+slot);
+  const dev = $('#dev'+slot).value;
+  const fourcc = $('#fmt'+slot).value;
+  const [w,h] = $('#res'+slot).value.split('x').map(Number);
+  const fps = parseInt($('#fps'+slot).value,10);
+  const res = await fetch('/api/apply',{
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({slot, device:dev, fourcc, width:w, height:h, fps})
+  });
+  const j = await res.json();
+  if(!res.ok){ sPill.textContent=j.error||'Apply failed'; sPill.className='pill bad'; return; }
+  const a=j.applied||{}; sPill.textContent=`${a.width}x${a.height}@${a.fps} ${a.fourcc}`; sPill.className='pill ok';
+  const img = $('#img'+slot); img.src = `/video/${slot}.mjpg?t=`+Date.now();
+}
+
+async function initSlot(slot){
+  await loadDevices(slot);
+  const caps = await loadCaps(slot);
+  // prefer MJPG if exists
+  const fmtSel = $('#fmt'+slot);
+  if([...
+    fmtSel.options].some(o=>o.value==='MJPG')) fmtSel.value='MJPG';
+  onFmtChange(slot, caps);
+  // show applied current (if server already opened)
+  try{
+    const j = await api(`/api/applied?slot=${slot}`); const a=j.applied||{};
+    const sPill = $('#s'+slot);
+    if(a && a.width){ sPill.textContent=`${a.width}x${a.height}@${a.fps} ${a.fourcc}`; sPill.className='pill ok'; }
+  }catch(e){}
+}
+
+// ----------------- ROS panel via WS -----------------
+function quat2yaw(q){
+  const x=q.x||0,y=q.y||0,z=q.z||0,w=q.w||0;
+  const siny_cosp = 2*(w*z + x*y);
+  const cosy_cosp = 1-2*(y*y + z*z);
+  return Math.atan2(siny_cosp, cosy_cosp);
+}
+
+function connectWS(){
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onmessage = ev => {
+    try{
+      const m = JSON.parse(ev.data);
+      if(m.topic==='\/status'){
+        $('#ros_status').textContent = m.data?.status ?? '-';
+        $('#ros_ts').textContent = new Date().toLocaleTimeString();
+      } else if(m.topic==='\/encoder'){
+        const arr = m.data?.data || [];
+        $('#ros_enc').textContent = arr.join(', ');
+        $('#ros_ts').textContent = new Date().toLocaleTimeString();
+      } else if(m.topic==='\/imu'){
+        const q = m.data?.orientation || {}; const yaw = quat2yaw(q);
+        $('#ros_imu_yaw').textContent = yaw.toFixed(3);
+        $('#ros_ts').textContent = new Date().toLocaleTimeString();
+      } else if(m.topic==='\/odom'){
+        const p = m.data?.pose?.pose?.position || {}; const q = m.data?.pose?.pose?.orientation || {};
+        const yaw = quat2yaw(q);
+        $('#ros_odom_pose').textContent = `${(p.x||0).toFixed(3)}, ${(p.y||0).toFixed(3)}, ${yaw.toFixed(3)}`;
+        $('#ros_ts').textContent = new Date().toLocaleTimeString();
+      }
+    }catch(e){ console.warn('bad msg', e); }
+  };
+  ws.onclose = ()=> setTimeout(connectWS, 1000);
+}
+
+(async function(){
+  await initSlot(1); await initSlot(2); await initSlot(3);
+  connectWS();
+})();
+</script>
+</body>
+</html>

@@ -1,4 +1,3 @@
-// ====== Cameras ======
 let tileIdSeq = 1;
 
 async function loadDevices(){
@@ -13,20 +12,26 @@ async function loadDevices(){
     sel.appendChild(opt);
   });
 }
-
 document.getElementById('refresh').onclick = loadDevices;
 document.getElementById('add').onclick = () => {
   const sel = document.getElementById('camSel');
   if (!sel.value) return;
   addTile(parseInt(sel.value,10));
 };
+loadDevices();
+
+async function fetchFormats(index){
+  const r = await fetch('/cam_formats?index='+encodeURIComponent(index));
+  const js = await r.json();
+  if (!js.ok) throw new Error(js.error || 'formats error');
+  return js.formats; // { FOURCC: {description, sizes:[{w,h,fps:[...]}] } }
+}
 
 function addTile(index){
   const id = 'tile'+(tileIdSeq++);
   const grid = document.getElementById('grid');
-
   const card = document.createElement('div');
-  card.className='card';
+  card.className='card one1';
   card.id = id;
 
   card.innerHTML = `
@@ -38,31 +43,145 @@ function addTile(index){
         <div id="${id}-state" class="chip">idle</div>
       </div>
       <div class="row">
+        <select id="${id}-ccSel"  title="FOURCC"></select>
+        <select id="${id}-resSel" title="Resolution"></select>
+        <select id="${id}-fpsSel" title="FPS"></select>
+
         <button id="${id}-start">Start</button>
         <button id="${id}-stop" disabled>Stop</button>
+
         <button id="${id}-fit" disabled>Fit</button>
         <button id="${id}-one" disabled>1:1</button>
-        <button id="${id}-close">Close</button>
+
+        <label style="margin-left:8px;">Zoom
+          <input type="range" id="${id}-zoom" min="50" max="300" value="100" style="vertical-align:middle;">
+        </label>
+
+        <button id="${id}-close" style="margin-left:auto;">Close</button>
       </div>
     </div>
-    <video id="${id}-v" class="vid" autoplay playsinline muted></video>
+    <div class="video-wrap" id="${id}-wrap">
+      <video id="${id}-v" class="vid" autoplay playsinline muted></video>
+    </div>
   `;
   grid.appendChild(card);
 
-  const v   = document.getElementById(`${id}-v`);
-  const st  = document.getElementById(`${id}-state`);
-  const fps = document.getElementById(`${id}-fps`);
-  const res = document.getElementById(`${id}-res`);
-  const bStart = document.getElementById(`${id}-start`);
-  const bStop  = document.getElementById(`${id}-stop`);
-  const bFit   = document.getElementById(`${id}-fit`);
-  const bOne   = document.getElementById(`${id}-one`);
-  const bClose = document.getElementById(`${id}-close`);
+  const ccSel  = card.querySelector(`#${id}-ccSel`);
+  const resSel = card.querySelector(`#${id}-resSel`);
+  const fpsSel = card.querySelector(`#${id}-fpsSel`);
 
-  let pc = null;
-  let stopFPS = null;
+  const v    = document.getElementById(`${id}-v`),
+        st   = document.getElementById(`${id}-state`),
+        fps  = document.getElementById(`${id}-fps`),
+        res  = document.getElementById(`${id}-res`),
+        bStart = document.getElementById(`${id}-start`),
+        bStop  = document.getElementById(`${id}-stop`),
+        bFit   = document.getElementById(`${id}-fit`),
+        bOne   = document.getElementById(`${id}-one`),
+        bClose = document.getElementById(`${id}-close`),
+        rngZoom= document.getElementById(`${id}-zoom`),
+        wrap   = document.getElementById(`${id}-wrap`);
+
+  let pc = null, stopFPS = null, zoom = 1.0, mode = 'one1';
+  let formats = null;
 
   function setState(s){ st.textContent = s; }
+
+  function setModeOne(){
+    mode = 'one1';
+    card.classList.remove('fit');
+    card.classList.add('one1');
+    wrap.classList.remove('scaled');
+    const w = v.videoWidth || 640;
+    const h = v.videoHeight|| 360;
+    v.style.width  = Math.round(w * zoom) + 'px';
+    v.style.height = Math.round(h * zoom) + 'px';
+    wrap.style.height = v.style.height;
+  }
+  function applyFitScale(){
+    const naturalW = v.videoWidth || 640;
+    const naturalH = v.videoHeight|| 360;
+    const wrapWidth = wrap.clientWidth || naturalW;
+    wrap.classList.add('scaled');
+    wrap.style.transform = `scale(${zoom})`;
+    const baseH   = wrapWidth * (naturalH / naturalW);
+    const scaledH = baseH * zoom;
+    wrap.style.height = Math.round(scaledH) + 'px';
+  }
+  function setModeFit(){
+    mode = 'fit';
+    card.classList.remove('one1');
+    card.classList.add('fit');
+    v.style.width = '100%';
+    v.style.height= 'auto';
+    applyFitScale();
+  }
+  function setZoom(val){
+    zoom = val;
+    if (mode === 'one1') setModeOne();
+    else applyFitScale();
+  }
+
+  function fillFourcc(){
+    ccSel.innerHTML = '';
+    const keys = Object.keys(formats);
+    keys.forEach(k=>{
+      const opt = document.createElement('option');
+      opt.value = k;
+      opt.textContent = `${k} — ${formats[k].description}`;
+      ccSel.appendChild(opt);
+    });
+    if (keys.includes('MJPG')) ccSel.value = 'MJPG';
+  }
+  function fillResFor(cc){
+    resSel.innerHTML = '';
+    if (!formats[cc]) return;
+    formats[cc].sizes.forEach(s=>{
+      const opt = document.createElement('option');
+      opt.value = `${s.w}x${s.h}`;
+      opt.textContent = `${s.w}×${s.h}`;
+      resSel.appendChild(opt);
+    });
+  }
+  function fillFpsFor(cc, wh){
+    fpsSel.innerHTML = '';
+    const size = formats[cc]?.sizes.find(s => (s.w+'x'+s.h)===wh);
+    if (!size){
+      const opt = document.createElement('option'); opt.value='30'; opt.textContent='30 fps';
+      fpsSel.appendChild(opt);
+      return;
+    }
+    size.fps.forEach(f=>{
+      const opt = document.createElement('option');
+      opt.value = f;
+      opt.textContent = `${f} fps`;
+      fpsSel.appendChild(opt);
+    });
+  }
+
+  async function initDropdowns(){
+    try{
+      formats = await fetchFormats(index);
+      if (!formats || Object.keys(formats).length===0){
+        throw new Error('no formats');
+      }
+      fillFourcc();
+      fillResFor(ccSel.value);
+      const firstWH = resSel.options[0]?.value || '640x480';
+      resSel.value = firstWH;
+      fillFpsFor(ccSel.value, resSel.value);
+    }catch(e){
+      console.warn('formats fallback', e);
+      // fallback minimal
+      formats = { MJPG:{description:'Motion-JPEG',sizes:[{w:640,h:360,fps:[30,25,20,15,10]}]} };
+      fillFourcc(); fillResFor('MJPG'); fillFpsFor('MJPG','640x360'); 
+      ccSel.value='MJPG'; resSel.value='640x360'; fpsSel.value='30';
+    }
+  }
+  initDropdowns();
+
+  ccSel.onchange  = ()=>{ fillResFor(ccSel.value); fillFpsFor(ccSel.value, resSel.value); };
+  resSel.onchange = ()=>{ fillFpsFor(ccSel.value, resSel.value); };
 
   async function start(){
     if (pc) return;
@@ -72,19 +191,62 @@ function addTile(index){
     pc.ontrack = (e)=>{
       v.srcObject = e.streams[0];
       setState('playing');
-      v.onloadedmetadata = ()=>{
-        setOneToOne();
+      v.onloadedmetadata = async ()=>{
         res.textContent = 'res: ' + v.videoWidth + 'x' + v.videoHeight;
+        setModeOne();
         startFPSCounter();
+
+        try{
+          const infoRes = await fetch('/cam_info?index='+encodeURIComponent(index));
+          const info = await infoRes.json();
+          if (info.ok){
+            const applied = `${info.w}x${info.h}@${(info.fps.toFixed ? info.fps.toFixed(1) : info.fps)} ${info.fourcc||''}`;
+            let chip = card.querySelector(`#${id}-applied`);
+            if (!chip){
+              chip = document.createElement('div');
+              chip.className = 'chip';
+              chip.id = `${id}-applied`;
+              res.parentElement.insertBefore(chip, res.nextSibling);
+            }
+            chip.textContent = 'applied: ' + applied;
+
+            const [selW, selH] = resSel.value.split('x').map(n=>parseInt(n,10));
+            const selF = parseFloat(fpsSel.value);
+            const selC = ccSel.value.toUpperCase();
+            const mismatch = (selW!==info.w) || (selH!==info.h) || (Math.abs(selF - Math.round(info.fps))>1) || (selC!==String(info.fourcc).toUpperCase());
+            let warn = card.querySelector(`#${id}-warn`);
+            if (mismatch){
+              if (!warn){
+                warn = document.createElement('div');
+                warn.id = `${id}-warn`;
+                warn.className = 'chip';
+                warn.style.borderColor = '#ff8a00';
+                warn.style.color = '#ffcc88';
+                warn.style.background = '#2a1a00';
+                res.parentElement.appendChild(warn);
+              }
+              warn.textContent = '⚠ ค่าใช้งานจริงต่างจากที่เลือก (ไดรเวอร์เลือกโหมดที่รองรับให้)';
+            } else if (warn){
+              warn.remove();
+            }
+          }
+        }catch(e){ console.warn('cam_info error', e); }
       };
     };
     pc.oniceconnectionstatechange = ()=> setState(pc.iceConnectionState);
 
+    const [W,H] = resSel.value.split('x').map(x=>parseInt(x,10));
+    const F = parseFloat(fpsSel.value);
+    const CC = ccSel.value;
+
+    const qs = new URLSearchParams({ index:String(index) });
+    if (W && H){ qs.set('w', String(W)); qs.set('h', String(H)); }
+    if (F){ qs.set('fps', String(F)); }
+    if (CC){ qs.set('fourcc', CC); }
+
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-    const r = await fetch('/offer?index='+encodeURIComponent(index), {
-      method:'POST', headers:{'Content-Type':'application/sdp'}, body:offer.sdp
-    });
+    const r = await fetch('/offer?'+qs.toString(), { method:'POST', headers:{'Content-Type':'application/sdp'}, body:offer.sdp });
     const ans = await r.text();
     await pc.setRemoteDescription({type:'answer', sdp:ans});
 
@@ -97,188 +259,41 @@ function addTile(index){
     pc.close(); pc=null;
     v.srcObject=null;
     setState('stopped');
-    fps.textContent='fps: --';
-    res.textContent='res: --';
+    fps.textContent='fps: --'; res.textContent='res: --';
+    const chip = card.querySelector(`#${id}-applied`); if (chip) chip.remove();
+    const warn = card.querySelector(`#${id}-warn`);    if (warn) warn.remove();
     if (stopFPS) stopFPS();
     bStart.disabled=false; bStop.disabled=true; bFit.disabled=true; bOne.disabled=true;
   }
 
-  function setOneToOne(){
-    const w=v.videoWidth||640, h=v.videoHeight||360;
-    v.style.width  = w + 'px';
-    v.style.height = h + 'px';
-  }
-  function setFit(){
-    v.style.width  = '100%';
-    v.style.height = 'auto';
-  }
-
   function startFPSCounter(){
     if (stopFPS) stopFPS();
-
     if ('requestVideoFrameCallback' in HTMLVideoElement.prototype) {
       let last=performance.now(), count=0, running=true;
-      const onFrame = (_now, _meta)=>{
-        if (!running) return;
-        count++;
-        const now=performance.now();
-        if (now-last>=1000) {
-          const f=(count*1000)/(now-last);
-          fps.textContent = 'fps: ' + f.toFixed(1);
-          count=0; last=now;
-        }
+      const onFrame=(_n,_m)=>{ if(!running) return; count++; const now=performance.now();
+        if(now-last>=1000){ fps.textContent='fps: '+((count*1000)/(now-last)).toFixed(1); count=0; last=now; }
         v.requestVideoFrameCallback(onFrame);
       };
       v.requestVideoFrameCallback(onFrame);
       stopFPS = ()=>{ running=false; };
       return;
     }
-
     let last=performance.now(), count=0, rafId=null;
-    const tick=()=>{
-      if (!v || v.readyState<2) { rafId=requestAnimationFrame(tick); return; }
-      count++;
-      const now=performance.now();
-      if (now-last>=1000) {
-        const f=(count*1000)/(now-last);
-        fps.textContent = 'fps: ' + f.toFixed(1);
-        count=0; last=now;
-      }
+    const tick=()=>{ if(!v||v.readyState<2){ rafId=requestAnimationFrame(tick); return; }
+      count++; const now=performance.now();
+      if(now-last>=1000){ fps.textContent='fps: '+((count*1000)/(now-last)).toFixed(1); count=0; last=now; }
       rafId=requestAnimationFrame(tick);
     };
     rafId=requestAnimationFrame(tick);
-    stopFPS = ()=>{ if (rafId) cancelAnimationFrame(rafId); };
+    stopFPS = ()=>{ if(rafId) cancelAnimationFrame(rafId); };
   }
 
-  bStart.onclick = start;
-  bStop.onclick  = stop;
-  bFit.onclick   = setFit;
-  bOne.onclick   = setOneToOne;
-  bClose.onclick = ()=>{ stop(); card.remove(); };
+  document.getElementById(`${id}-start`).onclick = start;
+  document.getElementById(`${id}-stop`).onclick  = stop;
+  document.getElementById(`${id}-fit`).onclick   = ()=> setModeFit();
+  document.getElementById(`${id}-one`).onclick   = ()=> setModeOne();
+  document.getElementById(`${id}-close`).onclick = ()=>{ stop(); card.remove(); };
+  document.getElementById(`${id}-zoom`).oninput  = (e)=> setZoom(parseInt(e.target.value,10)/100);
 
-  // auto start
-  start();
+  // ไม่ auto-start — เลือกจากรายการจริงก่อน
 }
-
-loadDevices();
-
-// ====== ROS Overlay + HUD ======
-(function initROS(){
-  const body = document.getElementById('ros-body');
-  const clearBtn = document.getElementById('ov-clear');
-  clearBtn.onclick = ()=>{ body.innerHTML = '<div class="empty">Cleared</div>'; };
-
-  function addItem(obj){
-    if (!obj || !obj.payload) return;
-    const p = obj.payload;
-    if (body.querySelector('.empty')) body.innerHTML = '';
-    const item = document.createElement('div');
-    item.className = 'item';
-    const ts = new Date((p.t||Date.now())*1000).toLocaleTimeString();
-    const pretty = JSON.stringify(p.data ?? p, null, 2);
-    item.innerHTML = `
-      <div class="topic">${p.topic || 'topic'}</div>
-      <div class="time">${ts}</div>
-      <pre style="white-space:pre-wrap; margin:4px 0 0 0;">${pretty}</pre>
-    `;
-    body.prepend(item);
-    const maxItems = 50;
-    while (body.children.length > maxItems) body.removeChild(body.lastChild);
-  }
-
-  // กฎแม็พไป HUD
-  const PIN_RULES = [
-    { topic: '/encoder', path: 'data.left',  elem: '#pin-left-enc',  fmt: v => v?.toFixed ? v.toFixed(0) : v },
-    { topic: '/encoder', path: 'data.right', elem: '#pin-right-enc', fmt: v => v?.toFixed ? v.toFixed(0) : v },
-    { topic: '/odom', path: 'data.pose.pose.position', elem: '#pin-dist',
-      fmt: p => {
-        if (!p || typeof p.x!=='number' || typeof p.y!=='number') return '—';
-        const d = Math.hypot(p.x, p.y); return d.toFixed(2);
-      }
-    },
-    { topic: '/imu', path: 'data.orientation', elem: '#pin-heading',
-      fmt: q => {
-        if (!q || typeof q.z!=='number' || typeof q.w!=='number') return '—';
-        const yaw = 2*Math.atan2(q.z, q.w); return (yaw*180/Math.PI).toFixed(1);
-      }
-    },
-  ];
-
-  function getPath(obj, path){
-    if (!obj || !path) return undefined;
-    const seg = path.split('.');
-    let cur = obj;
-    for (const s of seg){
-      if (cur && Object.prototype.hasOwnProperty.call(cur, s)){
-        cur = cur[s];
-      } else {
-        return undefined;
-      }
-    }
-    return cur;
-  }
-
-  function tryUpdatePins(p){
-    let matched = false;
-    for (const r of PIN_RULES){
-      if (r.topic && p.topic !== r.topic) continue;
-      const v = getPath(p, r.path);
-      if (typeof v === 'undefined') continue;
-      const el = document.querySelector(r.elem);
-      if (!el) continue;
-      el.textContent = r.fmt ? String(r.fmt(v)) : String(v);
-      matched = true;
-    }
-    return matched;
-  }
-
-  // ปุ่ม reset HUD
-  document.getElementById('pin-clear').onclick = ()=>{
-    ['#pin-left-enc','#pin-right-enc','#pin-dist','#pin-heading'].forEach(sel=>{
-      const el = document.querySelector(sel);
-      if (el) el.textContent = '—';
-    });
-  };
-
-  // WebSocket (อันเดียว!)
-  function connect(){
-    const ws = new WebSocket((location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/ws');
-    ws.onopen    = ()=> console.log('[WS] open');
-    ws.onclose   = ()=> { console.log('[WS] closed, retry...'); setTimeout(connect, 1500); };
-    ws.onerror   = (e)=> console.warn('[WS] error', e);
-    ws.onmessage = (e)=>{
-      try{
-        const msg = JSON.parse(e.data);
-        if (msg.type !== 'ros' || !msg.payload) return;
-        const p = msg.payload;
-
-        // อัปเดต /status (ถ้ามี status-box)
-        if (p.topic === '/status'){
-          const el = document.getElementById('status-text'); // กล่องเขียวมุมซ้ายบน
-          if (el && p.data && typeof p.data.status === 'string') {
-            el.textContent = p.data.status;
-          }
-          // อัปเดต chip ด้านบน (optional)
-          const chip = document.getElementById('status');
-          if (chip) chip.textContent = p.data?.status ?? 'status';
-        }
-
-        // พยายามอัปเดต HUD ตาม PIN_RULES
-        const handled = tryUpdatePins(p);
-
-        // ถ้าไม่ match → โผล่ overlay list
-        if (!handled) addItem(msg);
-      }catch(err){
-        console.warn('parse ws msg err', err);
-      }
-    };
-  }
-  connect();
-})();
-
-// Toggle float/dock ของ sidebar (ค่าเริ่มต้น: dock)
-document.getElementById('toggle-float').onclick = ()=>{
-  document.body.classList.toggle('float');
-  document.getElementById('toggle-float').textContent =
-    document.body.classList.contains('float') ? 'Dock Overlay' : 'Float Overlay';
-};
