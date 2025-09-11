@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import re, os, glob, subprocess, threading, time, json
+import re, os, glob, subprocess, threading, time, json, asyncio
 from typing import Dict, List
 
 from flask import Flask, jsonify, request, Response, send_from_directory
 from flask_sock import Sock
 import cv2
+import numpy as np
+from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
+from av import VideoFrame
 
 # ============================
 # Flask app
@@ -13,6 +16,10 @@ import cv2
 APP_HOST = "0.0.0.0"
 APP_PORT = 8000
 DEFAULT_DEV = "/dev/video0"
+
+# WebRTC resource knobs (override via env)
+WEBRTC_SCALE = float(os.environ.get("WEBRTC_SCALE", "1.0"))  # 0.5 = half size
+WEBRTC_MAX_FPS = int(os.environ.get("WEBRTC_MAX_FPS", "20")) # cap encode fps
 
 app = Flask(__name__, static_url_path="/static")
 sock = Sock(app)
@@ -66,6 +73,22 @@ class CameraManager:
             "height": None,
             "fps": None
         }
+        self._read_thread = None
+        self._stop = threading.Event()
+        self._latest = None  # latest BGR frame (numpy array)
+
+    def _reader_loop(self):
+        while not self._stop.is_set():
+            with self.lock:
+                cap = self.cap
+            if cap is None:
+                time.sleep(0.02)
+                continue
+            ok, frame = cap.read()
+            if ok:
+                self._latest = frame
+            else:
+                time.sleep(0.005)
 
     def _open(self, device, fourcc, width, height, fps):
         if self.cap is not None:
@@ -111,28 +134,32 @@ class CameraManager:
         })
         print("Applied:", self.applied)
 
+        # (re)start reader thread
+        self._stop.clear()
+        if self._read_thread is None or not self._read_thread.is_alive():
+            self._read_thread = threading.Thread(target=self._reader_loop, daemon=True)
+            self._read_thread.start()
+
     def apply(self, device, fourcc, width, height, fps):
         with self.lock:
             self._open(device, fourcc, width, height, fps)
             return dict(self.applied)
 
     def frames(self):
+        # MJPEG generator using latest buffered frames
         while True:
-            with self.lock:
-                cap = self.cap
-            if cap is None:
-                time.sleep(0.05)
-                continue
-            ok, frame = cap.read()
-            if not ok:
-                time.sleep(0.01)
+            frame = self._latest
+            if frame is None:
+                time.sleep(0.02)
                 continue
             ok, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
             if not ok:
+                time.sleep(0.01)
                 continue
-            yield (b"--frame\r\n"
-                   b"Content-Type: image/jpeg\r\n\r\n" +
-                   jpg.tobytes() + b"\r\n")
+            yield (b"--frame\r\n" b"Content-Type: image/jpeg\r\n\r\n" + jpg.tobytes() + b"\r\n")
+
+    def latest_frame(self):
+        return self._latest
 
 # 3 ช่องกล้อง (slot 1..3)
 cam_mgrs = {1: CameraManager(), 2: CameraManager(), 3: CameraManager()}
@@ -168,6 +195,18 @@ def list_caps(device: str) -> Dict:
 
     current_fmt = None
     current_size = None
+    
+    def add_fps(fmt, size, fps_val: float):
+        if not fmt or not size:
+            return
+        # keep one decimal precision to avoid 20 vs 20.1 confusion
+        f = round(float(fps_val), 1)
+        arr = caps[fmt].setdefault(size, [])
+        # ensure uniqueness with tolerance
+        for x in arr:
+            if abs(x - f) < 0.05:
+                return
+        arr.append(f)
 
     for line in out.splitlines():
         line = line.strip()
@@ -182,24 +221,30 @@ def list_caps(device: str) -> Dict:
             current_size = f"{m.group(1)}x{m.group(2)}"
             caps[current_fmt].setdefault(current_size, [])
             continue
+        m = re.match(r"Size:\s+Stepwise\s+(\d+)x(\d+)\s+to\s+(\d+)x(\d+)", line)
+        if m and current_fmt:
+            # at least expose the minimum stepwise size so UI can pick the lowest
+            min_w, min_h = m.group(1), m.group(2)
+            current_size = f"{min_w}x{min_h}"
+            caps[current_fmt].setdefault(current_size, [])
+            continue
         m = re.search(r"\(([\d\.]+)\s*fps\)", line)
         if m and current_fmt and current_size:
-            fps = round(float(m.group(1)))
-            if fps not in caps[current_fmt][current_size]:
-                caps[current_fmt][current_size].append(fps)
+            fps = float(m.group(1))
+            add_fps(current_fmt, current_size, fps)
             continue
         m = re.search(r"framerate\s*:\s*(\d+)\s*/\s*(\d+)", line, re.IGNORECASE)
         if m and current_fmt and current_size:
             num, den = int(m.group(1)), int(m.group(2))
             if den != 0:
-                fps = round(num/den)
-                if fps not in caps[current_fmt][current_size]:
-                    caps[current_fmt][current_size].append(fps)
+                fps = num/den
+                add_fps(current_fmt, current_size, fps)
             continue
 
     for fmt in caps:
         for sz in caps[fmt]:
-            caps[fmt][sz] = sorted(caps[fmt][sz], reverse=True)
+            # sort ascending (smallest fps first)
+            caps[fmt][sz] = sorted(caps[fmt][sz])
     return caps
 
 # ============================
@@ -234,15 +279,55 @@ def api_apply():
         return jsonify({"error": "slot ต้องเป็น 1..3"}), 400
 
     try:
-        width = int(width); height = int(height); fps = int(fps)
+        width = int(width); height = int(height); fps = float(fps)
     except Exception:
         return jsonify({"error": "width/height/fps ต้องเป็นตัวเลข"}), 400
 
     if fourcc not in ("MJPG", "YUYV", "YUY2", "H264", "XVID"):
         return jsonify({"error": f"FOURCC '{fourcc}' ไม่ถูกสนับสนุน"}), 400
 
+    # clamp/resolve to actual supported tuple
     try:
-        applied = cam_mgrs[slot].apply(device, fourcc, width, height, fps)
+        supported = list_caps(device)
+    except Exception as e:
+        return jsonify({"error": f"อ่านความสามารถกล้องไม่ได้: {e}"}), 400
+
+    def pick_tuple(req_fourcc, req_w, req_h, req_fps):
+        # pick fourcc
+        fmt = req_fourcc if req_fourcc in supported else None
+        if fmt is None:
+            # prefer MJPG, then YUYV/YUY2, then any
+            for cand in ("MJPG", "YUYV", "YUY2"):
+                if cand in supported:
+                    fmt = cand; break
+            if fmt is None and supported:
+                fmt = list(supported.keys())[0]
+
+        # pick size (closest area)
+        def parse_sz(s):
+            try:
+                w,h = s.split('x'); return int(w), int(h)
+            except Exception:
+                return 0,0
+        sizes = list(supported.get(fmt, {}).keys())
+        if not sizes:
+            sizes = [f"{req_w}x{req_h}"]
+        target_area = req_w * req_h
+        best_sz = min(sizes, key=lambda s: abs((parse_sz(s)[0]*parse_sz(s)[1]) - target_area))
+        bw,bh = parse_sz(best_sz)
+
+        # pick fps (closest to requested)
+        fps_list = supported.get(fmt, {}).get(best_sz, [])
+        if not fps_list:
+            bfps = req_fps
+        else:
+            bfps = min(fps_list, key=lambda x: abs(x-req_fps))
+        return fmt, bw, bh, bfps
+
+    picked_fmt, picked_w, picked_h, picked_fps = pick_tuple(fourcc, width, height, fps)
+
+    try:
+        applied = cam_mgrs[slot].apply(device, picked_fmt, picked_w, picked_h, picked_fps)
         return jsonify({"slot": slot, "applied": applied})
     except Exception as e:
         return jsonify({"error": str(e)}), 400
@@ -260,6 +345,88 @@ def video_mjpg(slot: int):
         return Response(status=404)
     return Response(cam_mgrs[slot].frames(),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
+
+# ============================
+# WebRTC signaling (answer SDP)
+# ============================
+
+class SlotVideoTrack(VideoStreamTrack):
+    kind = "video"
+    def __init__(self, slot: int):
+        super().__init__()
+        self.slot = slot
+        self._interval = (1.0 / WEBRTC_MAX_FPS) if WEBRTC_MAX_FPS and WEBRTC_MAX_FPS > 0 else 0.0
+        self._next_t = time.monotonic()
+
+    async def recv(self):
+        # FPS pacing to reduce CPU
+        if self._interval > 0:
+            now = time.monotonic()
+            delay = self._next_t - now
+            if delay > 0:
+                await asyncio.sleep(delay)
+            self._next_t += self._interval
+
+        frame = cam_mgrs[self.slot].latest_frame()
+        if frame is None:
+            # send black frame placeholder (640x360)
+            h, w = 360, 640
+            if WEBRTC_SCALE and WEBRTC_SCALE != 1.0:
+                w = max(2, int(w * WEBRTC_SCALE)); h = max(2, int(h * WEBRTC_SCALE))
+            blank = np.zeros((h, w, 3), dtype=np.uint8)
+            vf = VideoFrame.from_ndarray(blank, format="bgr24")
+        else:
+            if WEBRTC_SCALE and WEBRTC_SCALE != 1.0:
+                frame = cv2.resize(frame, None, fx=WEBRTC_SCALE, fy=WEBRTC_SCALE, interpolation=cv2.INTER_AREA)
+            vf = VideoFrame.from_ndarray(frame, format="bgr24")
+        pts, time_base = await self.next_timestamp()
+        vf.pts, vf.time_base = pts, time_base
+        return vf
+
+_webrtc_loop = None
+_webrtc_thread = None
+_pcs = set()
+
+def _ensure_loop():
+    global _webrtc_loop, _webrtc_thread
+    if _webrtc_loop is not None:
+        return
+    _webrtc_loop = asyncio.new_event_loop()
+    def run():
+        asyncio.set_event_loop(_webrtc_loop)
+        _webrtc_loop.run_forever()
+    _webrtc_thread = threading.Thread(target=run, daemon=True)
+    _webrtc_thread.start()
+
+async def _handle_offer_async(slot: int, sdp: str) -> str:
+    pc = RTCPeerConnection()
+    _pcs.add(pc)
+
+    @pc.on("iceconnectionstatechange")
+    async def on_ice():
+        if pc.iceConnectionState in ("failed", "disconnected", "closed"):
+            await pc.close()
+            _pcs.discard(pc)
+
+    await pc.setRemoteDescription(RTCSessionDescription(sdp=sdp, type="offer"))
+    pc.addTrack(SlotVideoTrack(slot))
+    answer = await pc.createAnswer()
+    await pc.setLocalDescription(answer)
+    return pc.localDescription.sdp
+
+@app.post("/webrtc/offer")
+def webrtc_offer():
+    slot = int(request.args.get("slot", 1))
+    if slot not in cam_mgrs:
+        return Response("invalid slot", status=400)
+    sdp = request.data.decode("utf-8", errors="ignore")
+    _ensure_loop()
+    fut = asyncio.run_coroutine_threadsafe(_handle_offer_async(slot, sdp), _webrtc_loop)
+    try:
+        ans_sdp = fut.result(timeout=10)
+    except Exception as e:
+        return Response(str(e), status=500)
+    return Response(ans_sdp, mimetype="application/sdp")
 
 # ============================
 # ROS bridge (subscribe & push to WS)
@@ -406,14 +573,18 @@ def boot_default():
             chosen = None
             for fmt in prefer_order + list(caps.keys()):
                 if fmt in caps:
-                    sizes = sorted(caps[fmt].keys(),
-                                   key=lambda s: (int(s.split('x')[0])*int(s.split('x')[1])),
-                                   reverse=True)
+                    # เลือกความละเอียดที่เล็กที่สุดก่อน (ประหยัดทรัพยากร)
+                    sizes = sorted(
+                        caps[fmt].keys(),
+                        key=lambda s: (int(s.split('x')[0]) * int(s.split('x')[1]))
+                    )
                     for sz in sizes:
                         fps_list = caps[fmt][sz]
                         if fps_list:
                             w, h = map(int, sz.split("x"))
-                            chosen = (fmt, w, h, fps_list[0])
+                            # เลือก fps ใกล้ 20 มากที่สุด (อาจเป็นทศนิยม เช่น 20.1)
+                            f_sel = min(fps_list, key=lambda x: abs(x-20.0))
+                            chosen = (fmt, w, h, f_sel)
                             break
                 if chosen: break
             if chosen:
