@@ -436,7 +436,7 @@ from rclpy.node import Node
 from builtin_interfaces.msg import Time as RosTime
 from sensor_msgs.msg import Imu
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Int32MultiArray, MultiArrayDimension, MultiArrayLayout, String
+from std_msgs.msg import Float32, Int32, Int32MultiArray, MultiArrayDimension, MultiArrayLayout, String
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy, QoSDurabilityPolicy
 
 def ros_time_to_float(t: RosTime):
@@ -456,12 +456,34 @@ class RosBridge(Node):
         self.create_subscription(Odometry, '/odom', self.on_odom, sensor_qos)
         self.create_subscription(Imu, '/imu', self.on_imu, sensor_qos)
         self.create_subscription(String, '/status', self.on_status, 10)
+        telemetry_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=10,
+            durability=QoSDurabilityPolicy.VOLATILE
+        )
+        self.create_subscription(Float32, '/controller/ping', self.on_controller_ping, telemetry_qos)
+        self.create_subscription(Float32, '/battery/voltage', self.on_battery_voltage, telemetry_qos)
+        self.create_subscription(Float32, '/rack/distance', self.on_rack_distance, telemetry_qos)
+        self.create_subscription(Float32, '/encoder/distance', self.on_encoder_distance, telemetry_qos)
+        self.create_subscription(String, '/robot/stage', self.on_robot_stage, telemetry_qos)
+        self.create_subscription(Float32, '/servo/position', self.on_servo_position, telemetry_qos)
+        self.create_subscription(Int32, '/seedling/index', self.on_seedling_index, telemetry_qos)
 
     def safe_push(self, payload):
         try:
             self.push(payload)
         except Exception as e:
             print(f"[RosBridge] push error: {e}")
+
+    def push_value(self, topic: str, type_str: str, value):
+        payload = {
+            "topic": topic,
+            "type": type_str,
+            "data": {"value": value},
+            "t": time.time()
+        }
+        self.safe_push(payload)
 
     def on_encoder(self, msg: Int32MultiArray):
         arr = list(msg.data) if msg.data is not None else []
@@ -533,6 +555,27 @@ class RosBridge(Node):
             "t": time.time()
         }
         self.safe_push(payload)
+
+    def on_controller_ping(self, msg: Float32):
+        self.push_value("/controller/ping", "std_msgs/Float32", float(msg.data))
+
+    def on_battery_voltage(self, msg: Float32):
+        self.push_value("/battery/voltage", "std_msgs/Float32", float(msg.data))
+
+    def on_rack_distance(self, msg: Float32):
+        self.push_value("/rack/distance", "std_msgs/Float32", float(msg.data))
+
+    def on_encoder_distance(self, msg: Float32):
+        self.push_value("/encoder/distance", "std_msgs/Float32", float(msg.data))
+
+    def on_robot_stage(self, msg: String):
+        self.push_value("/robot/stage", "std_msgs/String", msg.data)
+
+    def on_servo_position(self, msg: Float32):
+        self.push_value("/servo/position", "std_msgs/Float32", float(msg.data))
+
+    def on_seedling_index(self, msg: Int32):
+        self.push_value("/seedling/index", "std_msgs/Int32", int(msg.data))
 
 # Thread: rclpy.spin
 _ros_node = None
