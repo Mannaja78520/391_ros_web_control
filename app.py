@@ -339,6 +339,12 @@ def api_applied():
         return jsonify({"error": "slot ต้องเป็น 1..3"}), 400
     return jsonify({"slot": slot, "applied": cam_mgrs[slot].applied})
 
+
+@app.get("/ping")
+def http_ping():
+    # lightweight endpoint for web clients to measure round-trip latency
+    return jsonify({"t": time.time()})
+
 @app.get("/video/<int:slot>.mjpg")
 def video_mjpg(slot: int):
     if slot not in cam_mgrs:

@@ -25,6 +25,21 @@ function connectWS(){
   };
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const ws = new WebSocket(`${proto}://${location.host}/ws`);
+  if(!window.__rosPingTimer){
+    const measureClientPing = async () => {
+      const start = performance.now();
+      try{
+        const resp = await fetch(`/ping?ts=${Date.now()}`, {cache: 'no-store'});
+        if(!resp.ok) throw new Error('bad status');
+        await resp.text();
+        setNum('#ros_ping', performance.now() - start, 0, ' ms');
+      }catch(err){
+        setText('#ros_ping', '-');
+      }
+    };
+    measureClientPing();
+    window.__rosPingTimer = setInterval(measureClientPing, 5000);
+  }
   ws.onmessage = ev => {
     try{
       const m = JSON.parse(ev.data);
@@ -32,10 +47,6 @@ function connectWS(){
       switch(m.topic){
         case '/status':
           setText('#ros_status', m.data?.status);
-          handled = true;
-          break;
-        case '/controller/ping':
-          setNum('#ros_ping', m.data?.value, 0);
           handled = true;
           break;
         case '/battery/voltage':

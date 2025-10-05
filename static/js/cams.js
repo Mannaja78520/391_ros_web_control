@@ -1,12 +1,29 @@
 const $ = s => document.querySelector(s);
 const api = (p)=>fetch(p).then(r=>r.json());
 const capsBySlot = {};
+let knownDevices = [];
+
+function diffDevices(newList){
+  const oldSet = new Set(knownDevices.map(d=>d.device));
+  const newSet = new Set(newList.map(d=>d.device));
+  let changed = false;
+  if(oldSet.size !== newSet.size) changed = true;
+  if(!changed){
+    for(const dev of newSet){
+      if(!oldSet.has(dev)){ changed = true; break; }
+    }
+  }
+  knownDevices = newList;
+  return changed;
+}
 
 async function loadDevices(slot){
   const j = await api('/api/devices');
   const devSel = $('#dev'+slot);
   devSel.innerHTML='';
-  (j.devices||[]).forEach(d=>{
+  const devices = j.devices || [];
+  (slot === 1 && diffDevices(devices));
+  devices.forEach(d=>{
     const opt=document.createElement('option');
     opt.value=d.device; opt.textContent=`${d.device}${d.name? ' — '+d.name:''}`;
     devSel.appendChild(opt);
@@ -138,4 +155,28 @@ async function initSlot(slot){
 
 (async function(){
   await initSlot(1); await initSlot(2); await initSlot(3);
+  const refreshAll = async () => {
+    const j = await api('/api/devices');
+    const devices = j.devices || [];
+    if(!diffDevices(devices)) return;
+    for(const slot of [1,2,3]){
+      const devSel = $('#dev'+slot);
+      const current = devSel.value;
+      devSel.innerHTML='';
+      devices.forEach(d=>{
+        const opt = document.createElement('option');
+        opt.value = d.device;
+        opt.textContent = `${d.device}${d.name? ' — '+d.name:''}`;
+        devSel.appendChild(opt);
+      });
+      if([...devSel.options].some(o=>o.value===current)){
+        devSel.value = current;
+      }
+      const caps = await loadCaps(slot);
+      const fmtSel = $('#fmt'+slot);
+      if ([...fmtSel.options].some(o=>o.value==='MJPG')) fmtSel.value='MJPG';
+      onFmtChange(slot, caps);
+    }
+  };
+  setInterval(refreshAll, 3000);
 })();
